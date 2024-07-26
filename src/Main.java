@@ -2,45 +2,15 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
 
 
-/*
-
--- postgres
-
-CREATE TABLE mytable (
-    id SERIAL PRIMARY KEY,
-    value INT NOT NULL
-);
-
-INSERT INTO mytable (value) VALUES (0), (0);
-
-
--- sql server
-
-CREATE TABLE dltable (
-    id INT PRIMARY KEY,
-    value INT NOT NULL
-);
-
-INSERT INTO dltable (id, value) VALUES (1, 0), (2, 0);
-
--- oracle
-
-CREATE TABLE dltable (
-    id NUMBER PRIMARY KEY,
-    value NUMBER NOT NULL
-);
-
-INSERT INTO dltable (id, value) VALUES (1, 0);
-INSERT INTO dltable (id, value) VALUES (2, 0);
-
-
- */
  class DeadlockSimulation {
 
-    private static final String POSTGRESQL_URL = "jdbc:postgresql://localhost:32768/dldb";
-    private static final String MSSQL_URL = "jdbc:sqlserver://localhost:1433;databaseName=dldb;encrypt=false";
+    private static final String POSTGRESQL_URL = "jdbc:postgresql://localhost:32768/unblu";
+    private static final String MSSQL_URL = "jdbc:sqlserver://localhost:1433;databaseName=unblu;encrypt=false";
     private static final String ORACLE_URL = "jdbc:oracle:thin:@//127.0.0.1:1521/oracledb";
 
      private static final String USER = "unblu";
@@ -51,21 +21,49 @@ INSERT INTO dltable (id, value) VALUES (2, 0);
 
      private static final String ORACLE_PASSWORD = "unblume";
 
-     private static final int MAX_RETRIES = 3;
+     private static final int MAX_RETRIES = 5;
     private static boolean enableRetry = true;
 
-    public DeadlockSimulation() {
+    String ID1="";
+    String ID2="";
+
+     public DeadlockSimulation() {
+
+    }
+
+    public void startSimulation() {
+        ID1 = getTrackingItemIdByType("AGENT");
+        ID2 = getTrackingItemIdByType("TRACKINGLIST");
+         System.out.println(" id1: "+ID1+",id2:"+ID2);
         Thread thread1 = new Thread(() -> handleTransaction(1));
         Thread thread2 = new Thread(() -> handleTransaction(2));
         thread1.start();
         thread2.start();
     }
 
+     public  String getTrackingItemIdByType(String trackingItemType)  {
+         String query = "SELECT id FROM unblu.live_trackingitem WHERE tracking_item_type = ?";
+         String id = "";
+         try (Connection connection = getConnection();
+              PreparedStatement preparedStatement = connection.prepareStatement(query)) {
+             preparedStatement.setString(1, trackingItemType);
+             try (ResultSet resultSet = preparedStatement.executeQuery()) {
+                 if (resultSet.next()) {
+                     id = resultSet.getString("id");
+                 }
+             }
+         } catch (SQLException e) {
+             e.printStackTrace();
+         }
+
+         return id;
+     }
+
     private void handleTransaction(int threadId) {
         int attempts = 0;
         boolean success = false;
 
-        while (attempts < MAX_RETRIES && !success) {
+        while (attempts < MAX_RETRIES) {  // && !success) {
             attempts++;
             try (Connection conn = getConnection()) {
                 conn.setAutoCommit(false);
@@ -78,6 +76,10 @@ INSERT INTO dltable (id, value) VALUES (2, 0);
                 success = true;
                 System.out.println("Thread " + threadId + " execution successful on attempt " + attempts);
             } catch (SQLException | InterruptedException e) {
+                e.printStackTrace();
+                try {
+                    Thread.sleep(5000);
+                }catch(Exception e1) {}
                 if (isDeadlock(e) && enableRetry) {
                     handleRetry(attempts, threadId);
                 } else {
@@ -91,17 +93,17 @@ INSERT INTO dltable (id, value) VALUES (2, 0);
         }
     }
     private Connection getConnection() throws SQLException {
-      //  return DriverManager.getConnection(POSTGRESQL_URL, USER, PASSWORD);
-       // return DriverManager.getConnection(MSSQL_URL, USER, MSSQL_PASSWORD);
-        return DriverManager.getConnection(ORACLE_URL, ORACLE_USER, ORACLE_PASSWORD);
+      // return DriverManager.getConnection(POSTGRESQL_URL, USER, POSTGRES_PASSWORD);
+       return DriverManager.getConnection(MSSQL_URL, USER, MSSQL_PASSWORD);
+       // return DriverManager.getConnection(ORACLE_URL, ORACLE_USER, ORACLE_PASSWORD);
     }
 
     private void executeThread1Operations(Connection conn) throws SQLException, InterruptedException {
         try {
-            try (PreparedStatement pstmt1 = conn.prepareStatement("UPDATE dltable SET value = value + 1 WHERE id = 1")) {
+            try (PreparedStatement pstmt1 = conn.prepareStatement("UPDATE unblu.live_trackingitem SET tracking_item_status = tracking_item_status  WHERE id = \'"+ID1+"\'")) { //='CHAT'
                 pstmt1.executeUpdate();
-                Thread.sleep(2000);
-                try (PreparedStatement pstmt2 = conn.prepareStatement("UPDATE dltable SET value = value + 1 WHERE id = 2")) {
+                Thread.sleep(5000);
+                try (PreparedStatement pstmt2 = conn.prepareStatement("UPDATE unblu.live_trackingitem SET tracking_item_status = tracking_item_status  WHERE id = \'"+ID2+"\'")) { //'ACCEPTED'
                     pstmt2.executeUpdate();
                 }
             }
@@ -113,10 +115,10 @@ INSERT INTO dltable (id, value) VALUES (2, 0);
 
     private void executeThread2Operations(Connection conn) throws SQLException, InterruptedException {
         try {
-            try (PreparedStatement pstmt1 = conn.prepareStatement("UPDATE dltable SET value = value + 1 WHERE id = 2")) {
+            try (PreparedStatement pstmt1 = conn.prepareStatement("UPDATE unblu.live_trackingitem SET tracking_item_status = tracking_item_status WHERE id = \'"+ID2+"\'")) {
                 pstmt1.executeUpdate();
-                Thread.sleep(2000);
-                try (PreparedStatement pstmt2 = conn.prepareStatement("UPDATE dltable SET value = value + 1 WHERE id = 1")) {
+                Thread.sleep(4000);
+                try (PreparedStatement pstmt2 = conn.prepareStatement("UPDATE unblu.live_trackingitem SET tracking_item_status = tracking_item_status  WHERE id = \'"+ID1+"\'")) {
                     pstmt2.executeUpdate();
                 }
             }
@@ -160,7 +162,9 @@ INSERT INTO dltable (id, value) VALUES (2, 0);
 public class Main {
     static DeadlockSimulation test;
 
-    public static void main(String[] args) {
-        test = new DeadlockSimulation();
+    public static void main(String[] args) throws InterruptedException {
+       test = new DeadlockSimulation();
+       test.startSimulation();
+       System.out.println("****");
     }
 }
